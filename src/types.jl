@@ -111,7 +111,7 @@ end
 # go objects
 abstract type Statement end
 
-struct Block
+struct Block <: Statement
     statements::Vector{Statement}
 end
 
@@ -121,6 +121,14 @@ struct QualifiedIdent
 end
 
 const TypeName = Union{Identifier, QualifiedIdent}
+
+abstract type AbstractExpression end
+abstract type AbstractUnaryExpr <: AbstractExpression end
+abstract type AbstractBinaryExpr <: AbstractExpression end
+
+struct Expression
+    expr::Union{AbstractUnaryExpr, AbstractBinaryExpr}
+end
 
 abstract type AbstractType end
 
@@ -199,14 +207,6 @@ struct InterfaceType <: AbstractType
     methodset::Vector{Union{InterfaceType, MethodSpec}}
 end
 
-abstract type AbstractExpression end
-abstract type AbstractUnaryExpr <: AbstractExpression end
-abstract type AbstractBinaryExpr <: AbstractExpression end
-
-struct Expression
-    expr::Union{AbstractUnaryExpr, AbstractBinaryExpr}
-end
-
 struct Selector
     identifier::Identifier
 end
@@ -260,6 +260,11 @@ end
 struct CompositeLit
     type::LiteralType
     value::LiteralValue
+end
+
+struct FunctionLit
+    signature::Signature
+    body::Block
 end
 
 const BasicLit = Union{NumericLiteral, RuneLiteral, StringLiteral}
@@ -339,11 +344,6 @@ struct VarDecl
     varspecs::Vector{VarSpec}
 end
 
-struct ShortVarDecl
-    identifiers::Vector{Identifier}
-    expressions::Vector{Expression}
-end
-
 struct Declaration <: Statement
     decl::Union{ConstDecl, TypeDecl, VarDecl}
 end
@@ -353,7 +353,145 @@ struct LabeledStmt <: Statement
     statement::Statement
 end
 
-const TopLevel = Union{Delcaration, FunctionDecl, MethodDecl}
+abstract type SimpleStmt <: Statement end
+
+struct ExpressionStmt <: SimpleStmt
+    expr::Expression
+end
+
+struct SendStmt <: SimpleStmt
+    channel::Expression
+    expr::Expression
+end
+
+struct IncDecStmt <: SimpleStmt
+    expr::Expression
+    operator::Operator # "++" or "--"
+end
+
+struct Assignment <: SimpleStmt
+    lhs::Vector{Expression}
+    op::Operator
+    rhs::Vector{Expression}
+end
+
+struct ShortVarDecl <: SimpleStmt
+    identifiers::Vector{Identifier}
+    expressions::Vector{Expression}
+end
+
+struct GoStmt <: Statement
+    expr::Expression
+end
+
+struct ReturnStmt <: Statement
+    exprs::Vector{Expression}
+end
+
+struct BreakStmt <: Statement
+    label::Union{Identifier, Nothing}
+end
+
+struct ContinueStmt <: Statement
+    label::Union{Identifier, Nothing}
+end
+
+struct GotoStmt <: Statement
+    label::Identifier
+end
+
+struct FallthroughStmt <: Statement
+end
+
+struct IfStmt <: Statement
+    stmt::Union{SimpleStmt, Nothing}
+    cond::Expression
+    iftrue::Block
+    ifelse::Union{IfStmt, Block}
+end
+
+struct ExprSwitchCase
+    case::Union{Vector{Expression}, Nothing} # nothing == "default"
+end
+
+struct ExprCaseClause
+    case::ExprSwitchCase
+    stmts::Vector{Statement}
+end
+
+struct ExprSwitchStmt
+    init::Union{SimpleStmt, Nothing}
+    switch::Expression
+    cases::Vector{ExprCaseClause}
+end
+
+struct TypeSwitchGuard
+    var::Union{Identifier, Nothing}
+    expr::PrimaryExpr
+end
+
+struct TypeList
+    types::Vector{GoType}
+end
+
+struct TypeSwitchCase
+    case::Union{TypeList, Nothing} # nothing == "default"
+end
+
+struct TypeCaseClause
+    case::TypeSwitchCase
+    stmts::Vector{Statement}
+end
+
+struct TypeSwitchStmt
+    init::Union{SimpleStmt, Nothing}
+    guard::TypeSwitchGuard
+    cases::Vector{TypeCaseClause}
+end
+
+struct SwitchStmt <: Statement
+    stmt::Union{ExprSwitchStmt, TypeSwitchStmt}
+end
+
+struct RecvStmt
+    vars::Union{Vector{Expression}, Vector{Identifier}}
+    recvexpr::Expression
+end
+
+struct CommCase
+    case::Union{SendStmt, RecvStmt, Nothing} # nothing == "default"
+end
+
+struct CommClause
+    case::CommCase
+    stmts::Vector{Statement}
+end
+
+struct SelectStmt <: Statement
+    comms::Vector{CommClause}
+end
+
+struct ForClause
+    init::Union{SimpleStmt, Nothing}
+    cond::Union{SimpleStmt, Nothing}
+    post::Union{SimpleStmt, Nothing}
+end
+
+struct RangeClause
+    vars::Union{Vector{Expression}, Vector{Identifier}}
+    range::Expression
+end
+
+struct ForStmt <: Statement
+    cond::Union{Expression, ForClause, RangeClause, Nothing}
+    body::Block
+end
+
+struct DeferStmt <: Statement
+    expr::Expression
+end
+
+const TopLevel = Union{Declaration, FunctionDecl, MethodDecl}
 
 struct Import
     package::Identifier
