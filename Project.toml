@@ -1,0 +1,4 @@
+name = "GoTranspiler"
+uuid = "f1d791eb-ae8b-4a0a-8b96-4ff9945f7caa"
+authors = ["Jacob Quinn <quinn.jacobd@gmail.com>"]
+version = "0.1.0"
