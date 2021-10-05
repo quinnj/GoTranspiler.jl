@@ -107,3 +107,261 @@ end
 struct StringLiteral <: Token
     value::String
 end
+
+# go objects
+abstract type Statement end
+
+struct Block
+    statements::Vector{Statement}
+end
+
+struct QualifiedIdent
+    package::Identifier
+    identifier::Identifier
+end
+
+const TypeName = Union{Identifier, QualifiedIdent}
+
+abstract type AbstractType end
+
+# const TypeLit = Union{ArrayType, StructType, PointerType, FunctionType, InterfaceType, SliceType, MapType, ChannelType}
+# we use AbstractType instead of TypeLit to break the cyclic dependency
+const GoType = Union{TypeName, AbstractType}
+
+struct ArrayType <: AbstractType
+    len::Expression
+    type::GoType
+end
+
+struct SliceType <: AbstractType
+    type::GoType
+end
+
+struct EmbeddedField
+    type::GoType
+end
+
+const Tag = String
+
+struct FieldDecl
+    field::Union{Pair{Vector{Identifier}, AbstractType}, EmbeddedField}
+    tag::Union{Nothing, Tag}
+end
+
+struct StructType <: AbstractType
+    fields::Vector{FieldDecl}
+end
+
+struct PointerType <: AbstractType
+    type::GoType
+end
+
+struct MapType <: AbstractType
+    key::GoType
+    value::GoType
+end
+
+struct ChannelType <: AbstractType
+    send::Bool
+    receive::Bool
+    type::GoType
+end
+
+struct ParameterDecl
+    identifiers::Vector{Identifier}
+    variadic::Bool
+    type::GoType
+end
+
+struct Parameters
+    params::Vector{ParameterDecl}
+end
+
+struct Result
+    result::Union{Parameters, AbstractType}
+end
+
+struct Signature
+    params::Parameters
+    result::Result
+end
+
+struct FunctionType <: AbstractType
+    signature::Signature
+end
+
+struct MethodSpec
+    methodname::Identifier
+    signature::Signature
+end
+
+struct InterfaceType <: AbstractType
+    methodset::Vector{Union{InterfaceType, MethodSpec}}
+end
+
+abstract type AbstractExpression end
+abstract type AbstractUnaryExpr <: AbstractExpression end
+abstract type AbstractBinaryExpr <: AbstractExpression end
+
+struct Expression
+    expr::Union{AbstractUnaryExpr, AbstractBinaryExpr}
+end
+
+struct Selector
+    identifier::Identifier
+end
+
+struct Index
+    expr::Expression
+end
+
+struct Slice
+    expr1::Expression
+    expr2::Expression
+    expr3::Union{Nothing, Expression}
+end
+
+struct TypeAssertion
+    type::GoType
+end
+
+struct Arguments
+    args::Union{Vector{Expression}, Tuple{GoType, Vector{Expression}}}
+    splat::Bool
+end
+
+struct MethodExpr
+    type::GoType
+    methodname::Identifier
+end
+
+struct Conversion
+    type::GoType
+    expr::Expression
+end
+
+abstract type AbstractElement end
+
+struct LiteralValue
+    elements::Vector{AbstractElement}
+end
+
+# TODO: LiteralType also supports "[" "..." "]" ElementType
+const LiteralType = Union{StructType, ArrayType, SliceType, MapType, TypeName}
+
+const Key = Union{Identifier, Expression, LiteralValue}
+const Element = Union{Expression, LiteralValue}
+
+struct KeyedElement <: AbstractElement
+    key::Union{Key, Nothing}
+    element::Element
+end
+
+struct CompositeLit
+    type::LiteralType
+    value::LiteralValue
+end
+
+const BasicLit = Union{NumericLiteral, RuneLiteral, StringLiteral}
+const Literal = Union{BasicLit, CompositeLit, FunctionLit}
+const OperandName = Union{Identifier, QualifiedIdent}
+const Operand = Union{Literal, OperandName, Expression}
+
+struct PrimaryExpr
+    expr::Union{
+        Operand,
+        Conversion,
+        MethodExpr,
+        Tuple{PrimaryExpr, Selector},
+        Tuple{PrimaryExpr, Index},
+        Tuple{PrimaryExpr, Slice},
+        Tuple{PrimaryExpr, TypeAssertion},
+        Tuple{PrimaryExpr, Arguments},
+    }
+end
+
+struct UnaryExpr <: AbstractUnaryExpr
+    expr::Union{PrimaryExpr, Tuple{Operator, UnaryExpr}}
+end
+
+struct BinaryExpr <: AbstractBinaryExpr
+    op::Operator
+    expr1::Expression
+    expr2::Expression
+end
+
+struct FunctionDecl
+    name::Identifier
+    signature::Signature
+    body::Block
+end
+
+struct MethodDecl
+    receiver::Parameters
+    name::Identifier
+    signature::Signature
+    body::Block
+end
+
+struct ConstSpec
+    identifiers::Vector{Identifier}
+    type::Union{Nothing, GoType}
+    expressions::Vector{Expression}
+end
+
+struct ConstDecl
+    consts::Vector{ConstSpec}
+end
+
+struct AliasDecl
+    name::Identifier
+    type::GoType
+end
+
+struct TypeDef
+    name::Identifier
+    type::GoType
+end
+
+const TypeSpec = Union{AliasDecl, TypeDef}
+
+struct TypeDecl
+    typespecs::Vector{TypeSpec}
+end
+
+struct VarSpec
+    identifiers::Vector{Identifier}
+    type::Union{Nothing, GoType}
+    expressions::Vector{Expression}
+end
+
+struct VarDecl
+    varspecs::Vector{VarSpec}
+end
+
+struct ShortVarDecl
+    identifiers::Vector{Identifier}
+    expressions::Vector{Expression}
+end
+
+struct Declaration <: Statement
+    decl::Union{ConstDecl, TypeDecl, VarDecl}
+end
+
+struct LabeledStmt <: Statement
+    label::Identifier
+    statement::Statement
+end
+
+const TopLevel = Union{Delcaration, FunctionDecl, MethodDecl}
+
+struct Import
+    package::Identifier
+    path::String
+end
+
+struct Package
+    name::Identifier
+    imports::Vector{Import}
+    toplevels::Vector{TopLevel}
+end
