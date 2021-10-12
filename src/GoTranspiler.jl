@@ -15,15 +15,27 @@ function transpile(dir, outdir)
 end
 
 function transpilefile(file, outdir)
-    gocode = parse(file)
+    bytes = Base.read(gofile)
+    tokens = tokenize(bytes)
     open(joinpath(outdir, basename(file) * ".jl"), "w+") do io
-        transpile(io, gocode)
+        # recursively calls transpile to consume full token stream
+        i = 1
+        while i <= length(tokens)
+            token = tokens[i]
+            i = transpile(io, token, tokens, i)
+        end
     end
 end
 
-function parse(gofile)
-    bytes = Base.read(gofile)
+function objectify(file::String)
+    bytes = Base.read(file)
     tokens = tokenize(bytes)
+    return objectify(tokens)
+end
+
+function objectify(tokens)
+    cmts = Dict{Any, Vector{Comment}}()
+    return objectify(Package, tokens, 1, cmts), cmts
 end
 
 function tokenize(bytes)
@@ -34,6 +46,30 @@ function tokenize(bytes)
         pos, token = parsetoken(bytes, pos, len)
         if token !== nothing
             push!(tokens, token)
+        end
+        if pos < len
+            b = bytes[pos]
+            if b == UInt8('\n')
+                # When the input is broken into tokens, a semicolon is automatically inserted into the token stream immediately after a line's final token if that token is
+                #     an identifier
+                #     an integer, floating-point, imaginary, rune, or string literal
+                #     one of the keywords break, continue, fallthrough, or return
+                #     one of the operators and punctuation ++, --, ), ], or }
+                token = tokens[end]
+                if token isa Identifier ||
+                   token isa LiteralToken ||
+                   token == BREAK ||
+                   token == CONTINUE ||
+                   token == FALLTHROUGH ||
+                   token == RETURN ||
+                   token == PLUSPLUS ||
+                   token == MINUSMINUS ||
+                   token == CP ||
+                   token == CSB ||
+                   token == CCB
+                    push!(tokens, SEMI)
+                end
+            end
         end
     end
     return tokens
@@ -128,15 +164,11 @@ function parsetoken(bytes, pos, len)
         return pos + 1, RuneLiteral(rune)
     elseif UInt8('0') <= b <= UInt8('9')
         # numeric literal
-        # TODO: this needs cleaned up
-        spos = pos
-        slen = 1
-        while (isdigit(Char(b)) || b == UInt8('_') || b == UInt8('.')) && pos < len
-            pos += 1
-            b = bytes[pos]
-            slen += 1
-        end
-        return pos, NumericLiteral(str(bytes, spos, slen - 1))
+        # grab a string for the next 50 bytes
+        forwardbytes = str(bytes, pos, 50)
+        num, slen = Meta.parse(forwardbytes, 1; greedy=false)
+        pos += slen - 1
+        return pos, NumericLiteral(num)
     else
         # punctuation, operator, keyword, or identifier
         val = string(Char(b))
@@ -167,10 +199,6 @@ function parsetoken(bytes, pos, len)
         end
     end
     return pos, nothing
-end
-
-function transpile(io::IO, gocode)
-
 end
 
 end # module
