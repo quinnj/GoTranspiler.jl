@@ -2,3 +2,6 @@ name = "GoTranspiler"
 uuid = "f1d791eb-ae8b-4a0a-8b96-4ff9945f7caa"
 authors = ["Jacob Quinn <quinn.jacobd@gmail.com>"]
 version = "0.1.0"
+
+[deps]
+JuliaFormatter = "98e50ef6-434e-11e9-1051-2b60c6c9e899"

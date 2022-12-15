@@ -61,7 +61,7 @@ function objectify(::Type{Vector{Expression}}, tokens, i, cmts)
     return x, i
 end
 
-mutable struct Selector
+mutable struct Selector <: AbstractGoType
     Selector() = new()
     identifier::Identifier
 end
@@ -72,7 +72,7 @@ function transpile(io, x::Selector, cmts)
     return
 end
 
-mutable struct Index
+mutable struct Index <: AbstractGoType
     Index() = new()
     expr::Expression
 end
@@ -84,7 +84,7 @@ function transpile(io, x::Index, cmts)
     return
 end
 
-mutable struct Slice
+mutable struct Slice <: AbstractGoType
     Slice() = new()
     expr1::Expression
     expr2::Expression
@@ -93,14 +93,22 @@ end
 
 function transpile(io, x::Slice, cmts)
     print(io, "[")
-    transpile(io, x.expr1, cmts)
+    if isdefined(x, :expr1)
+        transpile(io, x.expr1, cmts)
+    else
+        print(io, "begin")
+    end
     print(io, ":")
-    transpile(io, x.expr2, cmts)
+    if isdefined(x, :expr2)
+        transpile(io, x.expr2, cmts)
+    else
+        print(io, "end")
+    end
     print(io, "]")
     return
 end
 
-mutable struct TypeAssertion
+mutable struct TypeAssertion <: AbstractGoType
     TypeAssertion() = new()
     type::Union{GoType, Keyword} # keyword for TypeSwitchGuard x.(type)
 end
@@ -111,7 +119,7 @@ function transpile(io, x::TypeAssertion, cmts)
     return
 end
 
-mutable struct Arguments
+mutable struct Arguments <: AbstractGoType
     Arguments() = new()
     type::GoType # only for make(type, args...)
     args::Vector{Expression}
@@ -120,22 +128,24 @@ end
 
 function transpile(io, x::Arguments, cmts)
     print(io, "(")
-    if x.type !== nothing
+    if isdefined(x, :type) && x.type !== nothing
         transpile(io, x.type, cmts)
         print(io, ", ")
     end
-    for (i, arg) in enumerate(x.args)
-        i > 1 && print(io, ", ")
-        transpile(io, arg, cmts)
-    end
-    if x.splat
-        print(io, "...")
+    if isdefined(x, :args)
+        for (i, arg) in enumerate(x.args)
+            i > 1 && print(io, ", ")
+            transpile(io, arg, cmts)
+        end
+        if x.splat
+            print(io, "...")
+        end
     end
     print(io, ")")
     return
 end
 
-mutable struct MethodExpr
+mutable struct MethodExpr <: AbstractGoType
     MethodExpr() = new()
     type::GoType
     methodname::Identifier
@@ -149,7 +159,7 @@ function transpile(io, x::MethodExpr, cmts)
     return
 end
 
-mutable struct Conversion
+mutable struct Conversion <: AbstractGoType
     Conversion() = new()
     type::GoType
     expr::Expression
@@ -164,9 +174,9 @@ function transpile(io, x::Conversion, cmts)
     return
 end
 
-abstract type AbstractElement end
+abstract type AbstractElement <: AbstractGoType end
 
-mutable struct LiteralValue
+mutable struct LiteralValue <: AbstractGoType
     LiteralValue() = new()
     elements::Vector{AbstractElement}
 end
@@ -177,7 +187,7 @@ function transpile(io, x::LiteralValue, cmts)
         i > 1 && print(io, ", ")
         transpile(io, elem, cmts)
     end
-    print(io, "]")
+    println(io, "]")
     return
 end
 
@@ -277,7 +287,7 @@ function objectify(::Type{KeyedElement}, tokens, i, cmts)
     return x, i
 end
 
-mutable struct CompositeLit
+mutable struct CompositeLit <: AbstractGoType
     CompositeLit() = new()
     type::LiteralType
     value::LiteralValue
@@ -290,23 +300,25 @@ function transpile(io, x::CompositeLit, cmts)
 end
 
 # forward declare Statement & Block since FunctionLit needs them
-abstract type Statement end
+abstract type Statement <: AbstractGoType end
 
 mutable struct Block <: Statement
     Block() = new()
     statements::Vector{Statement}
 end
 
-mutable struct FunctionLit
+mutable struct FunctionLit <: AbstractGoType
     FunctionLit() = new()
     signature::Signature
     body::Block
 end
 
 function transpile(io, x::FunctionLit, cmts)
+    print(io, "(")
     transpile(io, x.signature, cmts)
     print(io, " -> ")
     transpile(io, x.body, cmts)
+    print(io, ")")
     return
 end
 
@@ -315,7 +327,7 @@ const Literal = Union{BasicLit, CompositeLit, FunctionLit}
 const OperandName = Union{Identifier, QualifiedIdent}
 const Operand = Union{Literal, OperandName, Expression}
 
-mutable struct PrimaryExpr
+mutable struct PrimaryExpr <: AbstractGoType
     PrimaryExpr() = new()
     expr::Union{
         Operand,
@@ -333,8 +345,14 @@ mutable struct PrimaryExpr
 end
 
 function transpile(io, x::PrimaryExpr, cmts)
+    if isdefined(x, :extra) && x.extra isa TypeAssertion
+        print(io, "(")
+    end
     transpile(io, x.expr, cmts)
     isdefined(x, :extra) && transpile(io, x.extra, cmts)
+    if isdefined(x, :extra) && x.extra isa TypeAssertion
+        print(io, ")")
+    end
     return
 end
 
@@ -529,10 +547,21 @@ function objectify(::Type{UnaryExpr}, tokens, i, cmts, parens_required, within_p
 end
 
 function transpile(io, x::UnaryExpr, cmts)
-    if isdefined(x, :unary_op)
-        transpile(io, x.unary_op, cmts)
+    if isdefined(x, :unary_op) && x.unary_op != AND && x.unary_op != MUL
+        if x.unary_op == LTMINUS
+            print(io, "take!(")
+        elseif x.unary_op == POW
+            print(io, "xor(")
+        elseif x.unary_op == ANDPOW
+            print(io, "0 & ~")
+        else
+            transpile(io, x.unary_op, cmts)
+        end
     end
     transpile(io, x.expr, cmts)
+    if isdefined(x, :unary_op) && (x.unary_op == LTMINUS || x.unary_op == POW)
+        print(io, ")")
+    end
     return
 end
 
@@ -546,6 +575,7 @@ end
 function transpile(io, x::BinaryExpr, cmts)
     transpile(io, x.expr1, cmts)
     print(io, " ")
+    # op = x.op.value == "!=" && x.expr2
     transpile(io, x.op, cmts)
     print(io, " ")
     transpile(io, x.expr2, cmts)

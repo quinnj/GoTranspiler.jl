@@ -12,9 +12,7 @@ end
 function transpile(io, x::Block, cmts)
     outputcomments(io, x, cmts)
     println(io, "begin")
-    for stmt in x.statements
-        transpile(io, stmt, cmts)
-    end
+    transpile(io, x.statements, cmts)
     println(io, "end")
     return
 end
@@ -38,6 +36,7 @@ end
 function transpile(io, x::Vector{Statement}, cmts)
     for stmt in x
         transpile(io, stmt, cmts)
+        println(io)
     end
     return
 end
@@ -160,9 +159,12 @@ mutable struct SendStmt <: SimpleStmt
 end
 
 function transpile(io, x::SendStmt, cmts)
+    outputcomments(io, x, cmts)
+    print(io, "put!(")
     transpile(io, x.channel, cmts)
-    print(io, " <- ")
+    print(io, ", ")
     transpile(io, x.expr, cmts)
+    print(io, ")")
     return
 end
 
@@ -176,9 +178,9 @@ function transpile(io, x::IncDecStmt, cmts)
     outputcomments(io, x, cmts)
     transpile(io, x.expr, cmts)
     if x.operator == PLUSPLUS
-        print(io, "+= 1")
+        print(io, " += 1")
     else
-        print(io, "-= 1")
+        print(io, " -= 1")
     end
     return
 end
@@ -196,7 +198,9 @@ function transpile(io, x::Assignment, cmts)
         i > 1 && print(io, ", ")
         transpile(io, y, cmts)
     end
-    print(io, " ", x.op, " ")
+    print(io, " ")
+    transpile(io, x.op, cmts)
+    print(io, " ")
     for (i, y) in enumerate(x.rhs)
         i > 1 && print(io, ", ")
         transpile(io, y, cmts)
@@ -241,6 +245,7 @@ function transpile(io, x::GoStmt, cmts)
     outputcomments(io, x, cmts)
     println(io, "Threads.@spawn begin")
     transpile(io, x.expr, cmts)
+    println(io)
     println(io, "end")
     return
 end
@@ -263,13 +268,15 @@ end
 function transpile(io, x::ReturnStmt, cmts)
     outputcomments(io, x, cmts)
     print(io, "return")
-    if !isempty(x.exprs)
+    if isdefined(x, :exprs) && !isempty(x.exprs)
+        print(io, " ")
         len = length(x.exprs)
         for (i, expr) in enumerate(x.exprs)
             transpile(io, expr, cmts)
             i == len || print(io, ", ")
         end
     end
+    print(io)
     return
 end
 
@@ -291,7 +298,7 @@ end
 
 function transpile(io, x::BreakStmt, cmts)
     outputcomments(io, x, cmts)
-    if x.label !== nothing
+    if isdefined(x, :label) && x.label !== nothing
         print(io, "@goto ", x.label)
     else
         print(io, "break")
@@ -317,7 +324,7 @@ end
 
 function transpile(io, x::ContinueStmt, cmts)
     outputcomments(io, x, cmts)
-    if x.label !== nothing
+    if isdefined(x, :label) && x.label !== nothing
         print(io, "@goto ", x.label)
     else
         print(io, "continue")
@@ -341,7 +348,8 @@ end
 
 function transpile(io, x::GotoStmt, cmts)
     outputcomments(io, x, cmts)
-    print(io, "@goto ", x.label)
+    print(io, "@goto ")
+    transpile(io, x.label, cmts)
     return
 end
 
@@ -390,26 +398,34 @@ end
 function transpile(io, x::IfStmt, cmts, printend=true)
     outputcomments(io, x, cmts)
     print(io, "if ")
-    transpile(io, x.stmt, cmts)
-    print(io, "; ")
+    if isdefined(x, :stmt)
+        print(io, "(")
+        transpile(io, x.stmt, cmts)
+        print(io, "; ")
+    end
     transpile(io, x.cond, cmts)
+    if isdefined(x, :stmt)
+        print(io, ")")
+    end
     println(io)
     # TODO: indent
     transpile(io, x.iftrue.statements, cmts)
-    if x.ifelse isa IfStmt
-        print(io, "elseif ")
-        # TODO: indent
-        transpile(io, x.ifelse, cmts, false)
-    elseif x.ifelse isa Block && !isempty(x.ifelse.statements)
-        println(io, "else")
-        # TODO: indent
-        transpile(io, x.ifelse.statements, cmts)
+    if isdefined(x, :ifelse)
+        if x.ifelse isa IfStmt
+            print(io, "else")
+            # TODO: indent
+            transpile(io, x.ifelse, cmts, false)
+        elseif x.ifelse isa Block && !isempty(x.ifelse.statements)
+            println(io, "else")
+            # TODO: indent
+            transpile(io, x.ifelse.statements, cmts)
+        end
     end
     printend && println(io, "end")
     return
 end
 
-mutable struct ExprCaseClause
+mutable struct ExprCaseClause <: AbstractGoType
     ExprCaseClause() = new()
     case::Union{Vector{Expression}, Nothing}
     stmts::Vector{Statement}
@@ -426,7 +442,7 @@ end
 
 function transpile(io, x::ExprSwitchStmt, cmts)
     outputcomments(io, x, cmts)
-    transpile(io, x.init, cmts)
+    isdefined(x, :init) && transpile(io, x.init, cmts)
     first = true
     for case in x.cases
         if first
@@ -435,22 +451,35 @@ function transpile(io, x::ExprSwitchStmt, cmts)
         else
             if case.case === nothing
                 println(io, "else")
-                transpile(io, x.switch, cmts)
-                print(io, " == (")
-                transpile(io, case.case, cmts)
-                println(io, ")")
             else
                 print(io, "elseif ")
             end
         end
-        # TODO: indent
+        if case.case !== nothing
+            if isdefined(x, :switch)
+                # switch x { ... }
+                transpile(io, x.switch, cmts)
+                print(io, " == ")
+            end
+            if length(case.case) > 1
+                print(io, "(")
+            end
+            for (i, c) in enumerate(case.case)
+                i > 1 && print(io, "; ")
+                transpile(io, c, cmts)
+            end
+            if length(case.case) > 1
+                print(io, ")")
+            end
+            println(io)
+        end
         transpile(io, case.stmts, cmts)
     end
     println(io, "end")
     return
 end
 
-mutable struct TypeSwitchGuard
+mutable struct TypeSwitchGuard <: AbstractGoType
     TypeSwitchGuard() = new()
     var::Union{Identifier, Nothing}
     expr::PrimaryExpr
@@ -466,7 +495,7 @@ function objectify(::Type{Vector{GoType}}, tokens, i, cmts)
     return x, i
 end
 
-mutable struct TypeCaseClause
+mutable struct TypeCaseClause <: AbstractGoType
     TypeCaseClause() = new()
     case::Union{Vector{GoType}, Nothing}
     stmts::Vector{Statement}
@@ -539,21 +568,60 @@ function objectify(::Type{SwitchStmt}, tokens, i, cmts)
     return x, i
 end
 
-mutable struct RecvStmt
+mutable struct RecvStmt <: AbstractGoType
     RecvStmt() = new()
     vars::Union{Vector{Expression}, Vector{Identifier}}
     recvexpr::Expression
 end
 
-mutable struct CommClause
+function transpile(io, x::RecvStmt, cmts)
+    outputcomments(io, x, cmts)
+    for (i, var) in enumerate(x.vars)
+        i > 1 && print(io, ", ")
+        transpile(io, var, cmts)
+    end
+    print(io, " = ")
+    transpile(io, x.recvexpr, cmts)
+    return
+end
+
+mutable struct CommClause <: AbstractGoType
     CommClause() = new()
     case::Union{SendStmt, RecvStmt, Nothing}
     stmts::Vector{Statement}
 end
 
+function transpile(io, x::CommClause, cmts)
+    outputcomments(io, x, cmts)
+    if x.case === nothing
+        println(io, "@default begin")
+    elseif x.case isa SendStmt
+        println(io, "@send begin")
+        transpile(io, x.case, cmts)
+        println(io)
+    elseif x.case isa RecvStmt
+        println(io, "@recv begin")
+        transpile(io, x.case, cmts)
+        println(io)
+    end
+    transpile(io, x.stmts, cmts)
+    println(io, "end")
+    return
+end
+
 mutable struct SelectStmt <: Statement
     SelectStmt() = new()
     comms::Vector{CommClause}
+end
+
+function transpile(io, x::SelectStmt, cmts)
+    outputcomments(io, x, cmts)
+    println(io, "@select begin")
+    for comm in x.comms
+        transpile(io, comm, cmts)
+    end
+    println(io, "end")
+    return
 end
 
 function objectify(::Type{SelectStmt}, tokens, i, cmts)
@@ -591,14 +659,14 @@ function objectify(::Type{SelectStmt}, tokens, i, cmts)
     return x, i
 end
 
-mutable struct ForClause
+mutable struct ForClause <: AbstractGoType
     ForClause() = new()
     init::SimpleStmt
     cond::SimpleStmt
     post::SimpleStmt
 end
 
-mutable struct RangeClause
+mutable struct RangeClause <: AbstractGoType
     RangeClause() = new()
     vars::Vector{Expression}
     range::Expression
@@ -689,30 +757,32 @@ function objectify(::Type{ForStmt}, tokens, i, cmts)
     return x, i
 end
 
-function transpile(x::ForStmt, io)
+function transpile(io, x::ForStmt, cmts)
     if x.cond === nothing
         println(io, "while true")
-        transpile(io, x.block.statements, cmts)
+        transpile(io, x.body.statements, cmts)
     elseif x.cond isa Expression
         print(io, "while ")
         transpile(io, x.cond, cmts)
         println(io)
-        transpile(io, x.block.statements, cmts)
+        transpile(io, x.body.statements, cmts)
     elseif x.cond isa RangeClause
         print(io, "for ")
+        print(io, "(")
         len = length(x.cond.vars)
         for (i, var) in enumerate(x.cond.vars)
             transpile(io, var, cmts)
             i == len || print(io, ", ")
         end
-        print(io, " in ")
+        print(io, ") in ")
         transpile(io, x.cond.range, cmts)
         println(io)
-        transpile(io, x.block.statements, cmts)
+        transpile(io, x.body.statements, cmts)
     else
         @assert x.cond isa ForClause
         if isdefined(x.cond, :init)
             transpile(io, x.cond.init, cmts)
+            println(io)
         end
         print(io, "while ")
         if isdefined(x.cond, :cond)
@@ -721,9 +791,10 @@ function transpile(x::ForStmt, io)
             print(io, "true")
         end
         println(io)
-        transpile(io, x.block.statements, cmts)
+        transpile(io, x.body.statements, cmts)
         if isdefined(x.cond, :post)
             transpile(io, x.cond.post, cmts)
+            println(io)
         end
     end
     println(io, "end")
@@ -746,8 +817,10 @@ end
 function transpile(io, x::DeferStmt, cmts)
     outputcomments(io, x, cmts)
     @warn "DeferStmt not supported in Julia: $x"
-    print(io, "defer ")
+    print(io, "@defer ")
     transpile(io, x.expr, cmts)
+    print(io)
+    return
 end
 
 mutable struct LabeledStmt <: Statement
@@ -768,7 +841,9 @@ end
 
 function transpile(io, x::LabeledStmt, cmts)
     outputcomments(io, x, cmts)
-    println(io, "@label ", x.label)
+    print(io, "@label ")
+    transpile(io, x.label, cmts)
+    println(io)
     transpile(io, x.statement, cmts)
     return
 end

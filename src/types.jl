@@ -1,19 +1,66 @@
-struct Identifier <: Token
+const SWAPS = Dict(
+    "string" => "String",
+    "bool" => "Bool",
+    "byte" => "UInt8",
+    "int" => "Int",
+    "int8" => "Int8",
+    "int16" => "Int16",
+    "int32" => "Int32",
+    "int64" => "Int64",
+    "uint" => "UInt",
+    "uint8" => "UInt8",
+    "uint16" => "UInt16",
+    "uint32" => "UInt32",
+    "uint64" => "UInt64",
+    "float32" => "Float32",
+    "float64" => "Float64",
+    "nil" => "nothing",
+)
+
+mutable struct Identifier <: Token
+    Identifier() = new()
     value::String
 end
+Identifier(value::String) = (x = Identifier(); x.value = clean(value); x)
+==(a::Identifier, b::Identifier) = a.value == b.value
 
 function transpile(io, x::Identifier, cmts)
-    print(io, x.value)
+    print(io, get(SWAPS, x.value, x.value))
     return
 end
 
-mutable struct QualifiedIdent
+mutable struct QualifiedIdent <: AbstractGoType
     QualifiedIdent() = new()
     package::Identifier
     identifier::Identifier
 end
 
+const NESTED_SWAPS = Dict(
+    "fmt" => Dict(
+        "Errorf" => "error",
+        "Printf" => "print",
+        "Println" => "println",
+        "Sprintf" => "string",
+    ),
+    "log" => Dict(
+        "Fatal" => "error",
+        "Fatalf" => "error",
+        "Fatalln" => "error",
+        "Panic" => "error",
+        "Panicf" => "error",
+        "Panicln" => "error",
+    )
+)
+
 function transpile(io, x::QualifiedIdent, cmts)
+    swap = get(NESTED_SWAPS, x.package.value, nothing)
+    if swap !== nothing
+        swap = get(swap, x.identifier.value, nothing)
+        if swap !== nothing
+            print(io, swap)
+            return
+        end
+    end
     print(io, x.package.value, ".", x.identifier.value)
     return
 end
@@ -52,7 +99,7 @@ function objectify(::Type{Vector{TypeName}}, tokens, i, cmts)
     return x, i
 end
 
-abstract type AbstractType end
+abstract type AbstractType <: AbstractGoType end
 
 # const TypeLit = Union{ArrayType, StructType, PointerType, FunctionType, InterfaceType, SliceType, MapType, ChannelType}
 # we use AbstractType instead of TypeLit to break the cyclic dependency
@@ -107,11 +154,11 @@ function objectify(::Type{GoType}, tokens, i, cmts)
 end
 
 # forward declare Expression because ArrayType needs it
-abstract type AbstractExpression end
+abstract type AbstractExpression <: AbstractGoType end
 abstract type AbstractUnaryExpr <: AbstractExpression end
 abstract type AbstractBinaryExpr <: AbstractExpression end
 
-mutable struct Expression
+mutable struct Expression <: AbstractGoType
     Expression() = new()
     expr::Union{AbstractUnaryExpr, AbstractBinaryExpr}
 end
@@ -176,7 +223,7 @@ end
 
 const Tag = String
 
-mutable struct FieldDecl
+mutable struct FieldDecl <: AbstractGoType
     FieldDecl() = new()
     names::Vector{Identifier}
     type::GoType
@@ -231,14 +278,18 @@ end
 
 function transpile(io, x::StructType, cmts)
     print(io, "NamedTuple{(")
-    for (i, field) in enumerate(x.fields)
-        i > 1 && print(io, ", ")
-        print(io, field.names[1].value)
+    for field in x.fields
+        for (i, nm) in enumerate(field.names)
+            print(io, nm.value)
+            print(io, ", ")
+        end
     end
     print(io, "), Tuple{")
-    for (i, field) in enumerate(x.fields)
-        i > 1 && print(io, ", ")
-        transpile(io, field.type, cmts)
+    for field in x.fields
+        for (i, nm) in enumerate(field.names)
+            transpile(io, field.type, cmts)
+            print(io, ", ")
+        end
     end
     print(io, "}}")
     return
@@ -266,7 +317,7 @@ mutable struct PointerType <: AbstractType
 end
 
 function transpile(io, x::PointerType, cmts)
-    transpile(x, x.type, cmts)
+    transpile(io, x.type, cmts)
     return
 end
 
@@ -353,7 +404,7 @@ function objectify(::Type{ChannelType}, tokens, i, cmts)
     return x, i
 end
 
-mutable struct ParameterDecl
+mutable struct ParameterDecl <: AbstractGoType
     ParameterDecl() = new()
     identifiers::Vector{Identifier}
     variadic::Bool
@@ -361,10 +412,14 @@ mutable struct ParameterDecl
 end
 
 function transpile(io, x::ParameterDecl, cmts)
-    for (i, ident) in enumerate(x.identifiers)
-        i > 1 && print(io, ", ")
-        print(io, ident.value)
-        print(io, "::")
+    if isdefined(x, :identifiers)
+        for (i, ident) in enumerate(x.identifiers)
+            i > 1 && print(io, ", ")
+            print(io, ident.value)
+            print(io, "::")
+            transpile(io, x.type, cmts)
+        end
+    else
         transpile(io, x.type, cmts)
     end
     if x.variadic
@@ -373,7 +428,7 @@ function transpile(io, x::ParameterDecl, cmts)
     return
 end
 
-mutable struct Parameters
+mutable struct Parameters <: AbstractGoType
     Parameters() = new()
     params::Vector{ParameterDecl}
 end
@@ -381,7 +436,7 @@ end
 function transpile(io, x::Parameters, cmts)
     print(io, "(")
     for (i, param) in enumerate(x.params)
-        i > 1 && print
+        i > 1 && print(io, ", ")
         transpile(io, param, cmts)
     end
     print(io, ")")
@@ -516,7 +571,7 @@ function objectify(::Type{Parameters}, tokens, i, cmts)
     return x, i
 end
 
-mutable struct Signature
+mutable struct Signature <: AbstractGoType
     Signature() = new()
     params::Parameters
     result::Union{Parameters, GoType}
@@ -526,9 +581,13 @@ function transpile(io, x::Signature, cmts)
     outputcomments(io, x, cmts)
     transpile(io, x.params, cmts)
     if isdefined(x, :result)
+        print(io, "# ")
         if x.result isa Parameters
             print(io, "::Tuple{")
-            transpile(io, x.result.params, cmts)
+            for (i, param) in enumerate(x.result.params)
+                i > 1 && print(io, ", ")
+                transpile(io, param, cmts)
+            end
             print(io, "}")
         else
             print(io, "::")
@@ -558,10 +617,10 @@ end
 
 function transpile(io, x::FunctionType, cmts)
     outputcomments(io, x, cmts)
-    @warn "FunctionTypes not supported in Julia: $x"
-    print(io, "Function{")
+    @warn "FunctionTypes not fully supported in Julia: $x"
+    print(io, "Function #=")
     transpile(io, x.signature, cmts)
-    print(io, "}")
+    print(io, "=#")
     return
 end
 
@@ -574,7 +633,7 @@ function objectify(::Type{FunctionType}, tokens, i, cmts)
     return x, i
 end
 
-mutable struct MethodSpec
+mutable struct MethodSpec <: AbstractGoType
     MethodSpec() = new()
     methodname::Identifier
     signature::Signature
@@ -603,15 +662,12 @@ end
 function transpile(io, x::InterfaceType, cmts)
     outputcomments(io, x, cmts)
     @warn "InterfaceTypes not supported in Julia: $x"
-    print(io, "interface")
-    print(io, "{")
+    println(io, "@interface begin")
     for (i, method) in enumerate(x.methodset)
-        if i > 1
-            print(io, ", ")
-        end
         transpile(io, method, cmts)
+        println(io)
     end
-    print(io, "}")
+    println(io, "end")
     return
 end
 

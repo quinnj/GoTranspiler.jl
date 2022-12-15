@@ -14,15 +14,27 @@ macro _assert(cond)
     end)
 end
 
-function _copy(x::T) where {T}
+const RESERVED = Set(["local", "global", "export", "let",
+    "for", "struct", "while", "const", "continue", "import",
+    "function", "if", "else", "try", "begin", "break", "catch",
+    "return", "using", "baremodule", "macro", "finally",
+    "module", "elseif", "end", "quote", "do"])
+
+clean(x) = x in RESERVED ? string("_", x) : x
+
+_copy(x::String) = x
+_copy(x) = copy(x)
+function _copy(x::T) where {T <: AbstractGoType}
     y = T()
     for f in fieldnames(T)
-        setfield!(y, f, copy(getfield(x, f)))
+        if isdefined(x, f)
+            setfield!(y, f, _copy(getfield(x, f)))
+        end
     end
     return y
 end
 
-abstract type Token end
+abstract type Token <: AbstractGoType end
 
 abstract type Comment <: Token end
 
@@ -187,12 +199,27 @@ struct RuneLiteral <: LiteralToken
     value::Char
 end
 
+function transpile(io, x::RuneLiteral, cmts)
+    print(io, repr(x.value))
+    return
+end
+
 struct StringLiteral <: LiteralToken
     value::String
 end
 
+function transpile(io, x::StringLiteral, cmts)
+    print(io, repr(x.value))
+    return
+end
+
 struct RawStringLiteral <: LiteralToken
     value::String
+end
+
+function transpile(io, x::RawStringLiteral, cmts)
+    print(io, repr(x.value))
+    return
 end
 
 tokenize(file::String) = tokenize(Base.read(file))

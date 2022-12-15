@@ -1,4 +1,4 @@
-mutable struct ConstSpec
+mutable struct ConstSpec <: AbstractGoType
     ConstSpec() = new()
     identifiers::Vector{Identifier}
     type::Union{Nothing, GoType}
@@ -30,19 +30,21 @@ function transpile(io, x::ConstSpec, cmts)
     print(io, "const ")
     len = length(x.identifiers)
     for (i, id) in enumerate(x.identifiers)
-        print(io, id)
-        if x.type !== nothing
+        transpile(io, id, cmts)
+        if isdefined(x, :type) && x.type !== nothing
             print(io, "::")
             transpile(io, x.type, cmts)
         end
         i == len || print(io, ", ")
     end
-    if !isempty(x.expressions)
+    if isdefined(x, :expressions) && !isempty(x.expressions)
         print(io, " = ")
         for (i, expr) in enumerate(x.expressions)
             transpile(io, expr, cmts)
             i == len || print(io, ", ")
         end
+    else
+        print(io, " = iota")
     end
     return
 end
@@ -78,20 +80,63 @@ function transpile(io, x::ConstDecl, cmts)
     outputcomments(io, x, cmts)
     for con in x.consts
         transpile(io, con, cmts)
+        println(io)
     end
     return
 end
 
-mutable struct AliasDecl
+mutable struct AliasDecl <: AbstractGoType
     AliasDecl() = new()
     name::Identifier
     type::GoType
 end
 
-mutable struct TypeDef
+function transpile(io, x::AliasDecl, cmts)
+    outputcomments(io, x, cmts)
+    print(io, "const ")
+    transpile(io, x.name, cmts)
+    print(io, " = ")
+    transpile(io, x.type, cmts)
+    return
+end
+
+mutable struct TypeDef <: AbstractGoType
     TypeDef() = new()
     name::Identifier
     type::GoType
+end
+
+function transpile(io, x::TypeDef, cmts)
+    outputcomments(io, x, cmts)
+    if x.type isa InterfaceType
+        print(io, "abstract type ")
+    else
+        print(io, "mutable struct ")
+    end
+    transpile(io, x.name, cmts)
+    if x.type isa StructType
+        println(io)
+        for field in x.type.fields
+            for nm in field.names
+                print(io, nm.value)
+                print(io, "::")
+                transpile(io, field.type, cmts)
+                println(io)
+            end
+        end
+        println(io, "end")
+    elseif x.type isa InterfaceType
+        println(io, " end")
+        transpile(io, x.type, cmts)
+        println(io)
+    else
+        transpile(io, x.type, cmts)
+        print(io, "::")
+        transpile(io, x.type, cmts)
+        println(io)
+        println(io, "end")
+    end
+    return
 end
 
 const TypeSpec = Union{AliasDecl, TypeDef}
@@ -119,15 +164,6 @@ function objectify(::Type{TypeSpec}, tokens, i, cmts)
     consumecmts!(x, tokens, starti, cmts)
     i = consumelinecmt!(x, tokens, i, cmts)
     return x, i
-end
-
-function transpile(io, x::Union{AliasDecl, TypeDef}, cmts)
-    outputcomments(io, x, cmts)
-    x isa TypeDef && @warn "go TypeDef doesn't have a Julia equivalent: $x"
-    print(io, "const ", x.name, " = ")
-    transpile(io, x.type, cmts)
-    println(io)
-    return
 end
 
 mutable struct TypeDecl <: Statement
@@ -162,10 +198,11 @@ function transpile(io, x::TypeDecl, cmts)
     for type in x.typespecs
         transpile(io, type, cmts)
     end
+    println(io)
     return
 end
 
-mutable struct VarSpec
+mutable struct VarSpec <: AbstractGoType
     VarSpec() = new()
     identifiers::Vector{Identifier}
     type::Union{Nothing, GoType}
@@ -211,25 +248,24 @@ end
 function transpile(io, x::VarSpec, cmts)
     outputcomments(io, x, cmts)
     len = length(x.identifiers)
-    if isdefined(x, :expressions) && isempty(x.expressions)
+    if !isdefined(x, :expressions) || isempty(x.expressions)
         print(io, "local ")
     end
     for (i, var) in enumerate(x.identifiers)
-        print(io, var)
-        if x.type !== nothing
+        transpile(io, var, cmts)
+        if isdefined(x, :type) && x.type !== nothing
             print(io, "::")
             transpile(io, x.type, cmts)
         end
         i == len || print(io, ", ")
     end
-    if !isempty(x.expressions)
+    if isdefined(x, :expressions) && !isempty(x.expressions)
         print(io, " = ")
         for (i, expr) in enumerate(x.expressions)
             transpile(io, expr, cmts)
             i == len || print(io, ", ")
         end
     end
-    println(io)
     return
 end
 
@@ -262,6 +298,7 @@ function transpile(io, x::VarDecl, cmts)
     outputcomments(io, x, cmts)
     for var in x.varspecs
         transpile(io, var, cmts)
+        println(io)
     end
     return
 end
@@ -285,14 +322,14 @@ function objectify(::Type{Declaration}, tokens, i, cmts)
     return x, i
 end
 
-mutable struct FunctionDecl
+mutable struct FunctionDecl <: AbstractGoType
     FunctionDecl() = new()
     name::Identifier
     signature::Signature
     body::Block
 end
 
-mutable struct MethodDecl
+mutable struct MethodDecl <: AbstractGoType
     MethodDecl() = new()
     receiver::Parameters
     name::Identifier
@@ -302,14 +339,17 @@ end
 
 function transpile(io, x::Union{FunctionDecl, MethodDecl}, cmts)
     outputcomments(io, x, cmts)
-    print(io, "function $(x.name)")
+    print(io, "function ")
+    transpile(io, x.name, cmts)
     sig = x.signature
     if x isa MethodDecl
         sig = _copy(sig)
-        prepend!(sig.params, x.receiver.params)
+        prepend!(sig.params.params, x.receiver.params)
     end
     transpile(io, sig, cmts)
-    transpile(io, x.body, cmts)
+    println(io)
+    transpile(io, x.body.statements, cmts)
+    println(io, "end")
     return
 end
 
@@ -357,7 +397,55 @@ function objectify(::Type{Vector{TopLevel}}, tokens, i, cmts)
     return x, i
 end
 
-mutable struct Import
+const GO_STDLIBS = [
+    "archive",
+    "bufio",
+    "builtin",
+    "bytes",
+    "cmd",
+    "compress",
+    "container",
+    "context",
+    "crypto",
+    "database",
+    "debug",
+    "embed",
+    "encoding",
+    "errors",
+    "expvar",
+    "flag",
+    "fmt",
+    "go",
+    "hash",
+    "html",
+    "image",
+    "index",
+    "internal",
+    "io",
+    "log",
+    "math",
+    "mime",
+    "net",
+    "os",
+    "path",
+    "plugin",
+    "reflect",
+    "regexp",
+    "runtime",
+    "sort",
+    "strconv",
+    "strings",
+    "sync",
+    "syscall",
+    "testdata",
+    "testing",
+    "text",
+    "time",
+    "unicode",
+    "unsafe/"
+]
+
+mutable struct Import <: AbstractGoType
     Import() = new()
     package::Identifier
     path::String
@@ -424,7 +512,7 @@ function objectify(::Type{Vector{Import}}, tokens, i, cmts)
     return x, i
 end
 
-mutable struct Package
+mutable struct Package <: AbstractGoType
     Package() = new()
     name::Identifier
     imports::Vector{Import}
@@ -448,8 +536,13 @@ end
 
 function transpile(io, x::Package, cmts)
     outputcomments(io, x, cmts)
-    println(io, "module $(x.name)\n")
+    print(io, "module ")
+    transpile(io, x.name, cmts)
+    println(io)
     for imp in x.imports
+        if split(imp.path, "/")[1] in GO_STDLIBS
+            continue
+        end
         transpile(io, imp, cmts)
     end
     println(io)

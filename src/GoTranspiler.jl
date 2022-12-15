@@ -1,5 +1,10 @@
 module GoTranspiler
 
+import Base: ==
+using JuliaFormatter
+
+abstract type AbstractGoType end
+
 include("tokens.jl")
 include("types.jl")
 include("expressions.jl")
@@ -48,11 +53,25 @@ struct Transpiled
     cmts::Dict{Any, Vector{Comment}}
 end
 
-function transpile(file::String)
+function transpile(file::String, out=IOBuffer())
     pkg, cmts = objectify(file)
-    io = IOBuffer()
+    if out === nothing
+        out = splitext(file)[1] * ".jl"
+    end
+    io = out isa String ? open(out, "w+") : out
     transpile(io, pkg, cmts)
-    return Transpiled(String(take!(io)), pkg, cmts)
+    out isa String && close(io)
+    code = out isa String ? out : String(take!(io))
+    try
+        if isfile(out)
+            format_file(code)
+        else
+            format_text(code)
+        end
+    catch e
+        @error "error formatting" exception=(e, catch_backtrace())
+    end
+    return Transpiled(code, pkg, cmts)
 end
 
 end # module
