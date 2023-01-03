@@ -200,6 +200,7 @@ function objectify(::Type{LiteralValue}, tokens, i, cmts)
     while token != CCB
         if token == COM
             i += 1
+            i = consumelinecmt!(length(x.elements) > 0 ? x.elements[end] : nothing, tokens, i, cmts)
             if tokens[i] == CCB
                 break
             end

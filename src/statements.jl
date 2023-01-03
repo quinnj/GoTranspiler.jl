@@ -587,7 +587,7 @@ end
 
 mutable struct CommClause <: AbstractGoType
     CommClause() = new()
-    case::Union{SendStmt, RecvStmt, Nothing}
+    case::Any
     stmts::Vector{Statement}
 end
 
